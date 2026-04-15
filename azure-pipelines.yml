@@ -1,0 +1,136 @@
+# Azure DevOps pipeline for running Karate tests.
+# It has two stages:
+# 1) Smoke: fast checks using @smoke tag
+# 2) Regression: broader checks using @regression tag
+
+# Run pipeline automatically when code is pushed to main branch.
+trigger:
+- main
+
+# Run pipeline for pull requests targeting main branch.
+pr:
+- main
+
+# Use Microsoft-hosted Ubuntu build agent.
+pool:
+  vmImage: ubuntu-latest
+
+# Global variables available to all stages/jobs.
+variables:
+  # JVM memory settings for Maven execution.
+  MAVEN_OPTS: "-Xmx2g"
+
+  # Karate runtime environment name.
+  # Passed as: -Dkarate.env=$(KARATE_ENV)
+  # Typical values: dev, qa, stage, prod
+  KARATE_ENV: "dev"
+
+  # Optional: use a variable group linked to Key Vault for secrets.
+  # - group: karate-secrets
+  # Optional secret pipeline variable (mark as secret in Azure DevOps):
+  # OPENWEATHER_API_KEY: "$(OPENWEATHER_API_KEY)"
+
+stages:
+# Stage 1: run quick smoke tests.
+- stage: Smoke
+  displayName: "Smoke API Tests"
+  jobs:
+  - job: RunSmoke
+    displayName: "Run tagged smoke tests"
+    steps:
+    # Ensure Java 17 is available on the agent.
+    - task: JavaToolInstaller@0
+      displayName: "Use Java 17"
+      inputs:
+        versionSpec: "17"
+        jdkArchitectureOption: x64
+        jdkSourceOption: PreInstalled
+
+    # Run Maven tests and only execute scenarios tagged with @smoke.
+    # -Dkarate.env sets environment for karate-config.js.
+    # -Dkarate.options filters scenarios by tag.
+    - task: Maven@4
+      displayName: "Run Karate smoke suite"
+      inputs:
+        mavenPomFile: "pom.xml"
+        goals: "test"
+        options: "-Dkarate.env=$(KARATE_ENV) -Dkarate.options=--tags @smoke"
+        javaHomeOption: JDKVersion
+        jdkVersionOption: "1.17"
+        jdkArchitectureOption: x64
+        publishJUnitResults: true
+        testResultsFiles: "**/surefire-reports/TEST-*.xml"
+      env:
+        # Exposes secret variable to Karate via System.getenv('OPENWEATHER_API_KEY').
+        OPENWEATHER_API_KEY: $(OPENWEATHER_API_KEY)
+
+    # Always publish Karate HTML report artifact, even if tests fail.
+    - task: PublishPipelineArtifact@1
+      displayName: "Publish Karate HTML reports"
+      condition: always()
+      inputs:
+        targetPath: "$(System.DefaultWorkingDirectory)/target/karate-reports"
+        artifact: "karate-reports-smoke"
+        publishLocation: pipeline
+
+    # Always publish Karate log file for debugging failures.
+    - task: PublishPipelineArtifact@1
+      displayName: "Publish Karate logs"
+      condition: always()
+      inputs:
+        targetPath: "$(System.DefaultWorkingDirectory)/target/karate.log"
+        artifact: "karate-log-smoke"
+        publishLocation: pipeline
+
+# Stage 2: run regression tests after smoke passes.
+- stage: Regression
+  displayName: "Regression API Tests"
+
+  # Execute only after Smoke succeeds.
+  dependsOn: Smoke
+  condition: succeeded()
+  jobs:
+  - job: RunRegression
+    displayName: "Run tagged regression tests"
+    steps:
+    # Ensure Java 17 is available in this job as well.
+    - task: JavaToolInstaller@0
+      displayName: "Use Java 17"
+      inputs:
+        versionSpec: "17"
+        jdkArchitectureOption: x64
+        jdkSourceOption: PreInstalled
+
+    # Run Maven tests and only execute scenarios tagged with @regression.
+    - task: Maven@4
+      displayName: "Run Karate regression suite"
+      inputs:
+        mavenPomFile: "pom.xml"
+        goals: "test"
+        options: "-Dkarate.env=$(KARATE_ENV) -Dkarate.options=--tags @regression"
+        javaHomeOption: JDKVersion
+        jdkVersionOption: "1.17"
+        jdkArchitectureOption: x64
+        publishJUnitResults: true
+        testResultsFiles: "**/surefire-reports/TEST-*.xml"
+      env:
+        # Exposes secret variable to Karate via System.getenv('OPENWEATHER_API_KEY').
+        OPENWEATHER_API_KEY: $(OPENWEATHER_API_KEY)
+
+    # Publish regression HTML report artifact.
+    - task: PublishPipelineArtifact@1
+      displayName: "Publish Karate HTML reports"
+      condition: always()
+      inputs:
+        targetPath: "$(System.DefaultWorkingDirectory)/target/karate-reports"
+        artifact: "karate-reports-regression"
+        publishLocation: pipeline
+
+    # Publish regression logs artifact.
+    - task: PublishPipelineArtifact@1
+      displayName: "Publish Karate logs"
+      condition: always()
+      inputs:
+        targetPath: "$(System.DefaultWorkingDirectory)/target/karate.log"
+        artifact: "karate-log-regression"
+        publishLocation: pipeline

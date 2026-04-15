@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Lightweight staged-diff secret scanner.
+# Scans only added lines in the current commit.
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "[secret-scan] git not found; skipping scan."
+  exit 0
+fi
+
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "[secret-scan] not a git repository; skipping scan."
+  exit 0
+fi
+
+# No staged changes means nothing to scan.
+if git diff --cached --quiet; then
+  exit 0
+fi
+
+# Patterns intentionally broad to catch likely leaks.
+# Add exceptions only when necessary and with review.
+PATTERN='(BEGIN (RSA|EC|OPENSSH|DSA) PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{35}|(?i)(api[_-]?key|secret|token|password|passwd|client[_-]?secret)\s*[:=]\s*["\x27]?[A-Za-z0-9_\-\.]{8,}["\x27]?|appid\s*=\s*[A-Za-z0-9]{16,})'
+
+# Only added lines, excluding patch metadata.
+ADDED_LINES=$(git diff --cached --no-color --unified=0 | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+
+if [[ -z "${ADDED_LINES}" ]]; then
+  exit 0
+fi
+
+MATCHES=$(echo "${ADDED_LINES}" | grep -E -n "${PATTERN}" | grep -Eiv '(replace_with|your[_-]?real|example|dummy|sample|changeme|test[_-]?key)' || true)
+
+if [[ -n "${MATCHES}" ]]; then
+  echo "${MATCHES}" >/tmp/secret-scan-matches.$$
+  echo
+  echo "[secret-scan] Potential secret detected in staged changes. Commit blocked."
+  echo "[secret-scan] Review these lines and move secrets to environment variables or Key Vault:"
+  sed 's/^/[secret-scan] /' /tmp/secret-scan-matches.$$
+  rm -f /tmp/secret-scan-matches.$$
+  echo
+  echo "[secret-scan] If this is a false positive, refactor the value or split the pattern-like text."
+  exit 1
+fi
+
+rm -f /tmp/secret-scan-matches.$$
+exit 0

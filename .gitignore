@@ -1,0 +1,15 @@
+# Maven build output
+/target/
+
+# Local environment and secret files
+.env
+.env.*
+!.env.example
+*.secret
+*secrets*.properties
+
+# Logs
+*.log
+
+# OS/editor noise
+.DS_Store
